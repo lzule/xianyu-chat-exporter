@@ -1,0 +1,19 @@
+# Exported chat files
+*.jsonl
+*_debug.json
+聊天记录_*.html
+调试数据_*.json
+
+# Spurious directory
+%SystemDrive%/
+
+# Temporary verification file
+_tmp_verify.js
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+.history/
