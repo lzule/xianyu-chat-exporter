@@ -1,5 +1,7 @@
 # Xianyu Chat Exporter
 
+[中文文档](README_zh.md)
+
 Chrome extension for exporting **Xianyu** (`xianyu.com` / `goofish.com`) chat records as JSON.
 
 ## Maintenance Log
