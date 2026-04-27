@@ -173,7 +173,7 @@ function setBusy(isRunning, message) {
   const btnAll = document.getElementById("exportAll");
   if (btnCurrent) {
     btnCurrent.disabled = isRunning;
-    btnCurrent.textContent = isRunning ? (message || "处理中...") : "导出当前会话（JSON）";
+    btnCurrent.textContent = isRunning ? (message || "处理中...") : "导出当前会话（JSON + HTML）";
   }
   if (btnAll) {
     btnAll.disabled = isRunning;
@@ -534,10 +534,20 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   function extractTimestamp(node) {
     var ownTime = getText(node.querySelector("time")) || getText(node.querySelector('[class*="time"]'));
     if (ownTime) return ownTime;
-    var prev = node.previousElementSibling;
+    // 向上找相对定位容器，遍历其前面的兄弟（xianyu-sample 方法）
+    var container = node.closest ? node.closest('[style*="position: relative"]') : null;
+    var startEl = container || node.parentElement;
+    var prev = startEl ? startEl.previousElementSibling : node.previousElementSibling;
     while (prev) {
       var t = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
       if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t)) return t;
+      prev = prev.previousElementSibling;
+    }
+    // fallback: 消息节点自身的兄弟
+    prev = node.previousElementSibling;
+    while (prev) {
+      var t2 = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
+      if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t2)) return t2;
       prev = prev.previousElementSibling;
     }
     return "";
@@ -668,11 +678,18 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
         dedupe.add(dedupeKey);
 
         var timestamp = extractTimestamp(el);
-        result.push({ id: result.length, isMe: isMe, text: text || "", selected: true, timestamp: timestamp || "" });
+        result.push({ id: result.length, isMe: isMe, text: text || "", selected: true, timestamp: timestamp || "", imageUrl: imageUrl, videoUrl: videoUrl });
       }
 
       if (result.length === 0) {
         return { ok: false, reason: "未读取到聊天消息" };
+      }
+
+      // Forward-fill timestamps
+      var lastTime = "";
+      for (var fi = 0; fi < result.length; fi++) {
+        if (result[fi].timestamp) lastTime = result[fi].timestamp;
+        else result[fi].timestamp = lastTime;
       }
 
       // 5. Search product info
@@ -682,7 +699,7 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
       // 6. Build JSON
       var product = productName || productImgUrl || "未识别商品";
       var rows = result.map(function (msg, idx) {
-        return { id: idx, role: msg.isMe ? "me" : "other", text: msg.text || "" };
+        return { id: idx, role: msg.isMe ? "me" : "other", text: msg.text || "", timestamp: msg.timestamp || "" };
       });
       var json = JSON.stringify({ product: product, messages: rows }, null, 2);
 
@@ -695,11 +712,59 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
       var safeContact = sanitizeName(contactName);
       var filename = subfolder ? subfolder + "/" + safeContact + "_" + dateStr + ".json" : safeContact + "_" + dateStr + ".json";
 
-      return { ok: true, count: result.length, filename: filename, contactName: contactName, json: json };
+      return { ok: true, count: result.length, filename: filename, contactName: contactName, json: json, messages: result, product: product };
     } catch (e) {
       return { ok: false, reason: e.message || "未知错误" };
     }
   })();
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\n/g, "<br>");
+}
+
+function generateHtmlExport(msgs, contactName, product) {
+  const messagesHtml = msgs.map(function (msg) {
+    var roleClass = msg.isMe ? "me" : "other";
+    var sender = msg.isMe ? "我" : escapeHtml(contactName);
+    var content = "";
+    if (msg.imageUrl) {
+      content += '<img class="chat-img" src="' + msg.imageUrl + '" alt="图片">';
+    }
+    if (msg.videoUrl) {
+      content += '<video class="chat-video" src="' + msg.videoUrl + '" controls></video>';
+    }
+    if (!msg.imageUrl && !msg.videoUrl) {
+      content += '<div class="text">' + escapeHtml(msg.text) + "</div>";
+    }
+    var timeHtml = msg.timestamp ? '<div class="time">' + escapeHtml(msg.timestamp) + "</div>" : "";
+    return '<div class="msg ' + roleClass + '">' +
+      '<div class="bubble">' + content + timeHtml + "</div></div>";
+  }).join("\n");
+
+  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+    '<title>聊天记录 - ' + escapeHtml(contactName) + '</title><style>' +
+    "* { margin: 0; padding: 0; box-sizing: border-box; }" +
+    "body { font-family: -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Microsoft YaHei\", sans-serif; background: #f5f5f5; padding: 20px; line-height: 1.5; }" +
+    ".container { max-width: 900px; width: 80%; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); overflow: hidden; }" +
+    ".header { background: linear-gradient(135deg, #FFE14D, #FFC107); color: #333; padding: 16px 20px; font-weight: 600; font-size: 16px; }" +
+    ".meta { padding: 10px 20px; background: #fafafa; border-bottom: 1px solid #eee; font-size: 12px; color: #999; }" +
+    ".chat { padding: 16px; background: #f7f7f7; }" +
+    ".msg { display: flex; margin-bottom: 16px; align-items: flex-start; }" +
+    ".msg.me { justify-content: flex-end; }" +
+    ".bubble { max-width: 70%; padding: 10px 14px; border-radius: 12px; position: relative; }" +
+    ".msg .bubble { background: #fff; border: 1px solid #e8e8e8; }" +
+    ".msg.me .bubble { background: #FFE14D; color: #333; }" +
+    ".text { font-size: 14px; word-break: break-word; }" +
+    ".chat-img { max-width: 200px; max-height: 300px; border-radius: 8px; display: block; cursor: pointer; }" +
+    ".chat-video { max-width: 200px; border-radius: 8px; }" +
+    ".time { font-size: 11px; color: #999; margin-top: 6px; text-align: right; }" +
+    ".msg.me .time { color: rgba(0,0,0,0.5); }" +
+    "</style></head><body><div class=\"container\">" +
+    '<div class="header">💬 聊天记录：' + escapeHtml(contactName) + "</div>" +
+    '<div class="meta">📅 导出时间：' + new Date().toLocaleString("zh-CN") + " | 📱 来源：闲鱼 | 商品：" + escapeHtml(product) + "</div>" +
+    '<div class="chat">' + messagesHtml + "</div></div></body></html>";
 }
 
 async function handleExportCurrentConversation() {
@@ -729,10 +794,21 @@ async function handleExportCurrentConversation() {
       return;
     }
 
-    await downloadFile(result.json, result.filename, "application/json");
+    // Derive base name from the JSON filename
+    const jsonBaseName = result.filename.replace(/\.json$/, "");
+    const baseNameNoFolder = jsonBaseName.includes("/") ? jsonBaseName.split("/").pop() : jsonBaseName;
 
-    updateRunProgress("完成", `已导出 ${result.count} 条消息\n${result.filename}`, "0秒");
-    alert(`导出完成\n${result.count} 条消息\n${result.contactName}`);
+    // JSON → json/ subfolder
+    const jsonPath = subfolder ? subfolder + "/json/" + baseNameNoFolder + ".json" : "json/" + baseNameNoFolder + ".json";
+    await downloadFile(result.json, jsonPath, "application/json");
+
+    // HTML → html/ subfolder
+    const html = generateHtmlExport(result.messages, result.contactName, result.product);
+    const htmlPath = subfolder ? subfolder + "/html/" + baseNameNoFolder + ".html" : "html/" + baseNameNoFolder + ".html";
+    await downloadFile(html, htmlPath, "text/html");
+
+    updateRunProgress("完成", `已导出 ${result.count} 条消息\n${jsonPath}\n${htmlPath}`, "0秒");
+    alert(`导出完成\n${result.count} 条消息\nJSON: ${jsonPath}\nHTML: ${htmlPath}`);
   } catch (error) {
     console.error("导出失败:", error);
     alert(`导出失败: ${error.message}`);
