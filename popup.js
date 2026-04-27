@@ -531,13 +531,23 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   }
 
   function findTransactionStatus() {
-    // Check active conversation in sidebar for transaction status badge
-    var activeItem = document.querySelector('[class*="conv-list"] [class*="active"], [class*="conv-list"] [class*="selected"]');
-    if (!activeItem) activeItem = document.querySelector('[class*="conv-list"]');
-    var badge = activeItem
-      ? activeItem.querySelector('[class*="order-success"], [class*="trade-status"], [class*="transaction"]')
-      : null;
-    if (!badge) badge = document.querySelector('[class*="order-success"]');
+    // Only check the currently active conversation item in sidebar
+    // The active item typically has a distinct background/border class
+    var scrollable = document.querySelector('[id*="conv-list"]') || document.querySelector('[class*="conv-list"]');
+    if (!scrollable) return "";
+    // Find active item — look for highlighted/selected style indicators
+    var items = scrollable.querySelectorAll(':scope > div > div, :scope > div');
+    var activeItem = null;
+    for (var ii = 0; ii < items.length; ii++) {
+      var style = items[ii].getAttribute("style") || "";
+      var cls = items[ii].className || "";
+      if (style.includes("background") || style.includes("border") || cls.indexOf("active") > -1 || cls.indexOf("selected") > -1 || cls.indexOf("current") > -1) {
+        activeItem = items[ii];
+        break;
+      }
+    }
+    if (!activeItem) return "";
+    var badge = activeItem.querySelector('[class*="order-success"]');
     if (badge) {
       var txt = getText(badge).trim();
       if (txt) return txt;
@@ -732,8 +742,7 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
       var rows = result.map(function (msg, idx) {
         return { id: idx, role: msg.isMe ? "me" : "other", text: msg.text || "", timestamp: msg.timestamp || "" };
       });
-      var jsonObj = { product: product, messages: rows };
-      if (transactionStatus) jsonObj.transactionStatus = transactionStatus;
+      var jsonObj = { product: product, transactionStatus: transactionStatus || "", messages: rows };
       var json = JSON.stringify(jsonObj, null, 2);
 
       // 7. Build filename — use last message timestamp, fallback to export time
