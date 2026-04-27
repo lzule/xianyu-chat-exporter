@@ -485,6 +485,21 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   }
 
   function findProductImage() {
+    // 1. Chat header product image (most reliable)
+    var headerSelectors = [
+      'main [class*="message-topbar"] [class*="left--"] img',
+      'main [class*="container"][data-spm="head"] [class*="left--"] img',
+      'main div[class*="left--"] > div > img'
+    ];
+    for (var hi = 0; hi < headerSelectors.length; hi++) {
+      var hel = document.querySelector(headerSelectors[hi]);
+      if (hel) {
+        var hsrc = hel.getAttribute("src") || "";
+        if (hsrc.startsWith("//")) hsrc = "https:" + hsrc;
+        if (hsrc && !isNoiseMedia(hsrc)) return hsrc;
+      }
+    }
+    // 2. Fallback: CDN pattern search
     var selectors = [
       'img[src*="fleamarket"]',
       'img[src*="goofish"]',
@@ -511,6 +526,21 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
           }
         }
       } catch (e) { /* cross-origin */ }
+    }
+    return "";
+  }
+
+  function findTransactionStatus() {
+    // Check active conversation in sidebar for transaction status badge
+    var activeItem = document.querySelector('[class*="conv-list"] [class*="active"], [class*="conv-list"] [class*="selected"]');
+    if (!activeItem) activeItem = document.querySelector('[class*="conv-list"]');
+    var badge = activeItem
+      ? activeItem.querySelector('[class*="order-success"], [class*="trade-status"], [class*="transaction"]')
+      : null;
+    if (!badge) badge = document.querySelector('[class*="order-success"]');
+    if (badge) {
+      var txt = getText(badge).trim();
+      if (txt) return txt;
     }
     return "";
   }
@@ -692,16 +722,19 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
         else result[fi].timestamp = lastTime;
       }
 
-      // 5. Search product info
+      // 5. Search product info & transaction status
       var productName = findProductName();
       var productImgUrl = findProductImage();
+      var transactionStatus = findTransactionStatus();
 
       // 6. Build JSON
       var product = productName || productImgUrl || "未识别商品";
       var rows = result.map(function (msg, idx) {
         return { id: idx, role: msg.isMe ? "me" : "other", text: msg.text || "", timestamp: msg.timestamp || "" };
       });
-      var json = JSON.stringify({ product: product, messages: rows }, null, 2);
+      var jsonObj = { product: product, messages: rows };
+      if (transactionStatus) jsonObj.transactionStatus = transactionStatus;
+      var json = JSON.stringify(jsonObj, null, 2);
 
       // 7. Build filename — use last message timestamp, fallback to export time
       var lastTimestamp = "";
@@ -712,7 +745,7 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
       var safeContact = sanitizeName(contactName);
       var filename = subfolder ? subfolder + "/" + safeContact + "_" + dateStr + ".json" : safeContact + "_" + dateStr + ".json";
 
-      return { ok: true, count: result.length, filename: filename, contactName: contactName, json: json, messages: result, product: product };
+      return { ok: true, count: result.length, filename: filename, contactName: contactName, json: json, messages: result, product: product, transactionStatus: transactionStatus };
     } catch (e) {
       return { ok: false, reason: e.message || "未知错误" };
     }
@@ -724,7 +757,7 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\n/g, "<br>");
 }
 
-function generateHtmlExport(msgs, contactName, product) {
+function generateHtmlExport(msgs, contactName, product, transactionStatus) {
   const messagesHtml = msgs.map(function (msg) {
     var roleClass = msg.isMe ? "me" : "other";
     var sender = msg.isMe ? "我" : escapeHtml(contactName);
@@ -763,7 +796,7 @@ function generateHtmlExport(msgs, contactName, product) {
     ".msg.me .time { color: rgba(0,0,0,0.5); }" +
     "</style></head><body><div class=\"container\">" +
     '<div class="header">💬 聊天记录：' + escapeHtml(contactName) + "</div>" +
-    '<div class="meta">📅 导出时间：' + new Date().toLocaleString("zh-CN") + " | 📱 来源：闲鱼 | 商品：" + escapeHtml(product) + "</div>" +
+    '<div class="meta">📅 导出时间：' + new Date().toLocaleString("zh-CN") + " | 📱 来源：闲鱼 | 商品：" + escapeHtml(product) + (transactionStatus ? " | " + escapeHtml(transactionStatus) : "") + "</div>" +
     '<div class="chat">' + messagesHtml + "</div></div></body></html>";
 }
 
@@ -803,7 +836,7 @@ async function handleExportCurrentConversation() {
     await downloadFile(result.json, jsonPath, "application/json");
 
     // HTML → html/ subfolder
-    const html = generateHtmlExport(result.messages, result.contactName, result.product);
+    const html = generateHtmlExport(result.messages, result.contactName, result.product, result.transactionStatus);
     const htmlPath = subfolder ? subfolder + "/html/" + baseNameNoFolder + ".html" : "html/" + baseNameNoFolder + ".html";
     await downloadFile(html, htmlPath, "text/html");
 

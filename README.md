@@ -6,6 +6,12 @@ Chrome extension for exporting **Xianyu** (`xianyu.com` / `goofish.com`) chat re
 
 ## Maintenance Log
 
+### 2026-04-27
+
+- Fixed product image detection: now targets chat header DOM (`main [class*="left--"] img`) before falling back to CDN pattern search
+- Added transaction status detection: reads `order-success` badge from sidebar conversation list, included in JSON and HTML exports
+- Product name and image detection more reliable using specific DOM selectors
+
 ### 2026-04-26
 
 - Refactored export pipeline: injected function returns data to popup for download instead of relying on `chrome.runtime.sendMessage`, eliminating "unknown error" crashes caused by background service worker cold starts
