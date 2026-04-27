@@ -485,22 +485,43 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   }
 
   function findProductImage() {
-    var el = document.querySelector('img[src*="fleamarket"]');
-    if (el) {
-      var src = el.getAttribute("src") || "";
-      if (src.startsWith("//")) src = "https:" + src;
-      return src;
+    var selectors = [
+      'img[src*="fleamarket"]',
+      'img[src*="goofish"]',
+      'img[src*="alicdn"]',
+      'img[src*="taobaocdn"]'
+    ];
+    for (var si = 0; si < selectors.length; si++) {
+      var el = document.querySelector(selectors[si]);
+      if (el && !isNoiseMedia(el.getAttribute("src") || "")) {
+        var src = el.getAttribute("src") || "";
+        if (src.startsWith("//")) src = "https:" + src;
+        return src;
+      }
     }
     var iframes = document.querySelectorAll("iframe");
     for (var i = 0; i < iframes.length; i++) {
       try {
-        el = iframes[i].contentDocument?.querySelector('img[src*="fleamarket"]');
-        if (el) {
-          var src2 = el.getAttribute("src") || "";
-          if (src2.startsWith("//")) src2 = "https:" + src2;
-          return src2;
+        for (var sj = 0; sj < selectors.length; sj++) {
+          var el2 = iframes[i].contentDocument?.querySelector(selectors[sj]);
+          if (el2 && !isNoiseMedia(el2.getAttribute("src") || "")) {
+            var src2 = el2.getAttribute("src") || "";
+            if (src2.startsWith("//")) src2 = "https:" + src2;
+            return src2;
+          }
         }
       } catch (e) { /* cross-origin */ }
+    }
+    return "";
+  }
+
+  function findProductName() {
+    var headerEl = document.querySelector('[class*="goods-name"], [class*="item-title"], [class*="product-name"], [class*="commodity-name"]');
+    if (headerEl) return getText(headerEl);
+    var cardEl = document.querySelector('[class*="product-card"], [class*="goods-card"], [class*="item-card"]');
+    if (cardEl) {
+      var titleEl = cardEl.querySelector('[class*="title"], [class*="name"]');
+      if (titleEl) return getText(titleEl);
     }
     return "";
   }
@@ -508,6 +529,39 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   function sanitizeName(value) {
     var raw = String(value || "unknown").trim();
     return raw.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, "_").replace(/_+/g, "_").slice(0, 64) || "unknown";
+  }
+
+  function extractTimestamp(node) {
+    var ownTime = getText(node.querySelector("time")) || getText(node.querySelector('[class*="time"]'));
+    if (ownTime) return ownTime;
+    var prev = node.previousElementSibling;
+    while (prev) {
+      var t = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
+      if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t)) return t;
+      prev = prev.previousElementSibling;
+    }
+    return "";
+  }
+
+  function parseTimestampForFilename(text) {
+    if (!text) return "";
+    var cleaned = text.replace(/\s+/g, " ").trim();
+    var now = new Date();
+    var y, m, d, hh, mm;
+    var match;
+    match = cleaned.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+    if (match) { y = +match[1]; m = +match[2]; d = +match[3]; hh = +match[4]; mm = +match[5]; }
+    else {
+      match = cleaned.match(/(\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+      if (match) { y = now.getFullYear(); m = +match[1]; d = +match[2]; hh = +match[3]; mm = +match[4]; }
+      else {
+        match = cleaned.match(/(\d{1,2}):(\d{2})/);
+        if (match) { y = now.getFullYear(); m = now.getMonth() + 1; d = now.getDate(); hh = +match[1]; mm = +match[2]; }
+        else return "";
+      }
+    }
+    var date = new Date(y, m - 1, d, hh, mm, 0, 0);
+    return Number.isNaN(date.getTime()) ? "" : formatDateForFilename(date);
   }
 
   function formatDateForFilename(date) {
@@ -560,7 +614,11 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
       var nameDivs = Array.from(
         document.querySelectorAll('div[style*="font-size: 12px"][style*="rgb(102, 102, 102)"]')
       ).filter(function (el) { return !el.getAttribute("style").includes("align-self") && el.textContent.trim().length > 0; });
-      var contactName = nameDivs[0]?.textContent?.trim() || "闲鱼聊天记录";
+      var contactName = (nameDivs[0]?.textContent?.trim())
+        || getText(document.querySelector('[class*="nickname"]'))
+        || getText(document.querySelector('[class*="user-name"]'))
+        || getText(document.querySelector('[class*="chat-title"]'))
+        || "闲鱼聊天记录";
 
       // 4. Extract messages
       var pane = detectChatPane();
@@ -609,25 +667,31 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
         if (dedupe.has(dedupeKey)) continue;
         dedupe.add(dedupeKey);
 
-        result.push({ id: result.length, isMe: isMe, text: text || "", selected: true });
+        var timestamp = extractTimestamp(el);
+        result.push({ id: result.length, isMe: isMe, text: text || "", selected: true, timestamp: timestamp || "" });
       }
 
       if (result.length === 0) {
         return { ok: false, reason: "未读取到聊天消息" };
       }
 
-      // 5. Search product image
+      // 5. Search product info
+      var productName = findProductName();
       var productImgUrl = findProductImage();
 
       // 6. Build JSON
-      var product = productImgUrl || "未识别商品";
+      var product = productName || productImgUrl || "未识别商品";
       var rows = result.map(function (msg, idx) {
         return { id: idx, role: msg.isMe ? "me" : "other", text: msg.text || "" };
       });
       var json = JSON.stringify({ product: product, messages: rows }, null, 2);
 
-      // 7. Build filename
-      var dateStr = formatDateForFilename(new Date());
+      // 7. Build filename — use last message timestamp, fallback to export time
+      var lastTimestamp = "";
+      for (var ri = result.length - 1; ri >= 0; ri--) {
+        if (result[ri].timestamp) { lastTimestamp = result[ri].timestamp; break; }
+      }
+      var dateStr = parseTimestampForFilename(lastTimestamp) || formatDateForFilename(new Date());
       var safeContact = sanitizeName(contactName);
       var filename = subfolder ? subfolder + "/" + safeContact + "_" + dateStr + ".json" : safeContact + "_" + dateStr + ".json";
 
