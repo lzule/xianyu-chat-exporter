@@ -574,20 +574,30 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   function extractTimestamp(node) {
     var ownTime = getText(node.querySelector("time")) || getText(node.querySelector('[class*="time"]'));
     if (ownTime) return ownTime;
-    // 向上找相对定位容器，遍历其前面的兄弟（xianyu-sample 方法）
+
+    // Time pattern — used for both matching and extraction
+    var timeRe = /((\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}))|((\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}))|((\d{1,2}):(\d{2}))/;
+
+    // 向上找相对定位容器，遍历其前面的兄弟
     var container = node.closest ? node.closest('[style*="position: relative"]') : null;
     var startEl = container || node.parentElement;
     var prev = startEl ? startEl.previousElementSibling : node.previousElementSibling;
     while (prev) {
-      var t = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
-      if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t)) return t;
-      prev = prev.previousElementSibling;
-    }
-    // fallback: 消息节点自身的兄弟
-    prev = node.previousElementSibling;
-    while (prev) {
-      var t2 = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
-      if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t2)) return t2;
+      // Only check centered elements (time separators are centered)
+      var centerEl = prev.querySelector('[style*="text-align: center"]');
+      if (centerEl) {
+        var ct = getText(centerEl).trim();
+        if (ct.length < 30 && timeRe.test(ct)) {
+          var m = ct.match(timeRe);
+          return m ? m[0].trim() : ct;
+        }
+      }
+      // Also accept prev itself if it's short and looks like a time label
+      var pt = getText(prev).trim();
+      if (pt.length < 30 && timeRe.test(pt) && !prev.querySelector('[class*="message"], [class*="bubble"], [class*="msg"]')) {
+        var m2 = pt.match(timeRe);
+        return m2 ? m2[0].trim() : pt;
+      }
       prev = prev.previousElementSibling;
     }
     return "";
