@@ -635,7 +635,53 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
 
   return (async function () {
     try {
-      // 1. Auto-scroll
+      // Helper: extract messages from current DOM into result array
+      function extractMessages(root) {
+        var detected = getCandidates(root);
+        var nodes = detected.nodes || [];
+        var msgs = [];
+        for (var ni = 0; ni < nodes.length; ni++) {
+          var el = nodes[ni];
+          var isMe = detectIsMe(el);
+          var text =
+            getText(el.querySelector('[class*="message-text"] > span')) ||
+            getText(el.querySelector('[class*="message-text"]')) ||
+            getText(el.querySelector('[class*="msg-text"]')) ||
+            getText(el.querySelector('[class*="content"]')) ||
+            getText(el.querySelector('[class*="bubble"]')) ||
+            getText(el);
+
+          var imageUrl = "";
+          var imageEl = el.querySelector('[class*="image-container"] img, .ant-image-img, img[src*="alicdn"], img[src*="goofish"], img');
+          if (imageEl) {
+            imageUrl = imageEl.getAttribute("src") || imageEl.getAttribute("data-src") || "";
+            if (imageUrl.startsWith("//")) imageUrl = "https:" + imageUrl;
+            if (isNoiseMedia(imageUrl)) imageUrl = "";
+          }
+
+          var videoEl = el.querySelector("video");
+          var videoUrl = "";
+          if (videoEl) {
+            videoUrl = videoEl.getAttribute("src") || videoEl.getAttribute("data-src") || "";
+            if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+            if (isNoiseMedia(videoUrl)) videoUrl = "";
+          }
+
+          if (!text && imageUrl) text = "[图片]";
+          if (!text && videoUrl) text = "[视频]";
+          if (!text && !imageUrl && !videoUrl) continue;
+
+          var timestamp = extractTimestamp(el);
+          msgs.push({ isMe: isMe, text: text || "", timestamp: timestamp || "", imageUrl: imageUrl, videoUrl: videoUrl });
+        }
+        return msgs;
+      }
+
+      // 0. Capture currently visible messages (newest) BEFORE any scrolling
+      var pane = detectChatPane();
+      var newestMsgs = extractMessages(pane || document);
+
+      // 1. Auto-scroll to load history
       if (doScroll) {
         var ml = document.querySelector('[class*="message-list"]');
         if (ml) {
@@ -663,9 +709,6 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
             lastCount = count;
             if (stagnant >= stagnantRounds) break;
           }
-          // Reload newest messages — virtual scroll may have unloaded them
-          if (isReverse) { ml.scrollTop = 0; } else { ml.scrollTop = ml.scrollHeight; }
-          await sleep(waitMs);
           document.body.style.overflow = savedBodyOverflow;
         }
       }
@@ -683,55 +726,19 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
         || getText(document.querySelector('[class*="chat-title"]'))
         || "闲鱼聊天记录";
 
-      // 4. Extract messages
-      var pane = detectChatPane();
-      var detected = getCandidates(pane || document);
-      var nodes = detected.nodes || [];
+      // 4. Extract history messages (from post-scroll DOM) and merge with newest
+      var historyMsgs = extractMessages(pane || document);
       var result = [];
       var dedupe = new Set();
-      var currentProduct = null;
 
-      for (var ni = 0; ni < nodes.length; ni++) {
-        var el = nodes[ni];
-        var product = extractProductInfo(el);
-        if (!product && el.previousElementSibling) product = extractProductInfo(el.previousElementSibling);
-        if (product) currentProduct = product;
-
-        var isMe = detectIsMe(el);
-        var text =
-          getText(el.querySelector('[class*="message-text"] > span')) ||
-          getText(el.querySelector('[class*="message-text"]')) ||
-          getText(el.querySelector('[class*="msg-text"]')) ||
-          getText(el.querySelector('[class*="content"]')) ||
-          getText(el.querySelector('[class*="bubble"]')) ||
-          getText(el);
-
-        var imageUrl = "";
-        var imageEl = el.querySelector('[class*="image-container"] img, .ant-image-img, img[src*="alicdn"], img[src*="goofish"], img');
-        if (imageEl) {
-          imageUrl = imageEl.getAttribute("src") || imageEl.getAttribute("data-src") || "";
-          if (imageUrl.startsWith("//")) imageUrl = "https:" + imageUrl;
-          if (isNoiseMedia(imageUrl)) imageUrl = "";
-        }
-
-        var videoEl = el.querySelector("video");
-        var videoUrl = "";
-        if (videoEl) {
-          videoUrl = videoEl.getAttribute("src") || videoEl.getAttribute("data-src") || "";
-          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-          if (isNoiseMedia(videoUrl)) videoUrl = "";
-        }
-
-        if (!text && imageUrl) text = "[图片]";
-        if (!text && videoUrl) text = "[视频]";
-        if (!text && !imageUrl && !videoUrl) continue;
-
-        var dedupeKey = (isMe ? "me" : "other") + "|" + text + "|" + imageUrl + "|" + videoUrl;
+      // Merge: history first, then newest (newest may overlap, dedup handles it)
+      var allMsgs = historyMsgs.concat(newestMsgs);
+      for (var mi = 0; mi < allMsgs.length; mi++) {
+        var msg = allMsgs[mi];
+        var dedupeKey = (msg.isMe ? "me" : "other") + "|" + msg.text + "|" + msg.imageUrl + "|" + msg.videoUrl;
         if (dedupe.has(dedupeKey)) continue;
         dedupe.add(dedupeKey);
-
-        var timestamp = extractTimestamp(el);
-        result.push({ id: result.length, isMe: isMe, text: text || "", selected: true, timestamp: timestamp || "", imageUrl: imageUrl, videoUrl: videoUrl });
+        result.push({ id: result.length, isMe: msg.isMe, text: msg.text, selected: true, timestamp: msg.timestamp, imageUrl: msg.imageUrl, videoUrl: msg.videoUrl });
       }
 
       if (result.length === 0) {
