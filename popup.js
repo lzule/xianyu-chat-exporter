@@ -781,21 +781,16 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
   })();
 }
 
-function escapeHtml(str) {
-  if (!str) return "";
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\n/g, "<br>");
-}
-
 function generateHtmlExport(msgs, contactName, product, transactionStatus) {
   const messagesHtml = msgs.map(function (msg) {
     var roleClass = msg.isMe ? "me" : "other";
     var sender = msg.isMe ? "我" : escapeHtml(contactName);
     var content = "";
     if (msg.imageUrl) {
-      content += '<img class="chat-img" src="' + msg.imageUrl + '" alt="图片">';
+      content += '<img class="chat-img" src="' + escapeHtml(msg.imageUrl) + '" alt="图片">';
     }
     if (msg.videoUrl) {
-      content += '<video class="chat-video" src="' + msg.videoUrl + '" controls></video>';
+      content += '<video class="chat-video" src="' + escapeHtml(msg.videoUrl) + '" controls></video>';
     }
     if (!msg.imageUrl && !msg.videoUrl) {
       content += '<div class="text">' + escapeHtml(msg.text) + "</div>";
@@ -963,7 +958,8 @@ async function handleExportAllConversations() {
         const bundle = buildExportBundle(convo.messages || [], {
           chatTitle: convo.chatTitle || "闲鱼聊天记录",
           contactName: convo.contactName || item.name || "聊天对象",
-          contactUserId: convo.contactUserId || "unknown"
+          contactUserId: convo.contactUserId || "unknown",
+          transactionStatus: convo.transactionStatus || ""
         });
 
         await downloadFile(bundle.json, buildDownloadPath(`${bundle.baseName}.json`), "application/json");
@@ -1114,26 +1110,36 @@ function updateSelectAll() {
 }
 
 function buildExportBundle(selectedMessages, metaBase) {
-  const dateStr = formatDateForFilename(new Date());
+  const normalized = ensureMessageRequiredFields(selectedMessages || []);
+
+  // Use last message timestamp for filename, fallback to export time
+  let lastTs = "";
+  for (let i = normalized.length - 1; i >= 0; i--) {
+    const ts = String(normalized[i].timestamp || "").trim();
+    if (ts && ts !== "未知时间") { lastTs = ts; break; }
+  }
+  const fallbackDate = new Date();
+  const parsed = parseTimestampText(lastTs, fallbackDate);
+  const dateStr = formatDateForFilename(parsed || fallbackDate);
 
   const safeContact = sanitizeFilenameSegment(metaBase.contactName || metaBase.chatTitle || "unknown");
   const baseName = `${safeContact}_${dateStr}`;
 
   return {
     baseName,
-    json: generateJson(selectedMessages, metaBase.productImageUrl || "")
+    json: generateJson(normalized, metaBase.productImageUrl || "", metaBase.transactionStatus || "")
   };
 }
 
-function generateJson(selectedMessages, productImgUrl) {
-  const normalized = ensureMessageRequiredFields(selectedMessages || []);
+function generateJson(normalizedMessages, productImgUrl, transactionStatus) {
   const product = productImgUrl || "未识别商品";
-  const rows = normalized.map((msg, idx) => ({
+  const rows = normalizedMessages.map((msg, idx) => ({
     id: idx,
     role: msg.isMe ? "me" : "other",
-    text: msg.text || ""
+    text: msg.text || "",
+    timestamp: msg.timestamp || ""
   }));
-  const output = { product, messages: rows };
+  const output = { product, transactionStatus: transactionStatus || "", messages: rows };
   return JSON.stringify(output, null, 2);
 }
 
@@ -1222,7 +1228,8 @@ function escapeHtml(text) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/'/g, "&#39;")
+    .replace(/\n/g, "<br>");
 }
 
 function isNoiseMediaUrl(url) {
@@ -1381,10 +1388,24 @@ function extractCurrentConversationInjected() {
   function extractTimestamp(node) {
     const ownTime = getText(node.querySelector("time")) || getText(node.querySelector('[class*="time"]'));
     if (ownTime) return ownTime;
-    let prev = node.previousElementSibling;
+    var timeRe = /((\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}))|((\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}))|((\d{1,2}):(\d{2}))/;
+    var container = node.closest ? node.closest('[style*="position: relative"]') : null;
+    var startEl = container || node.parentElement;
+    var prev = startEl ? startEl.previousElementSibling : node.previousElementSibling;
     while (prev) {
-      const t = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
-      if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t)) return t;
+      var centerEl = prev.querySelector('[style*="text-align: center"]');
+      if (centerEl) {
+        var ct = getText(centerEl).trim();
+        if (ct.length < 30 && timeRe.test(ct)) {
+          var m = ct.match(timeRe);
+          return m ? m[0].trim() : ct;
+        }
+      }
+      var pt = getText(prev).trim();
+      if (pt.length < 30 && timeRe.test(pt) && !prev.querySelector('[class*="message"], [class*="bubble"], [class*="msg"]')) {
+        var m2 = pt.match(timeRe);
+        return m2 ? m2[0].trim() : pt;
+      }
       prev = prev.previousElementSibling;
     }
     return "";
@@ -2020,15 +2041,27 @@ function processConversationInjected(entry, stagnantTarget, maxMs, waitMs) {
   function extractTimestamp(node) {
     const ownTime = getText(node.querySelector("time")) || getText(node.querySelector('[class*="time"]'));
     if (ownTime) return ownTime;
-    let prev = node.previousElementSibling;
+    var timeRe = /((\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}))|((\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}))|((\d{1,2}):(\d{2}))/;
+    var container = node.closest ? node.closest('[style*="position: relative"]') : null;
+    var startEl = container || node.parentElement;
+    var prev = startEl ? startEl.previousElementSibling : node.previousElementSibling;
     while (prev) {
-      const t = getText(prev.querySelector('[style*="text-align: center"]')) || getText(prev);
-      if (/(\d{4}[-/]\d{1,2}[-/]\d{1,2})|(\d{1,2}[-/]\d{1,2})|(\d{1,2}:\d{2})/.test(t)) return t;
+      var centerEl = prev.querySelector('[style*="text-align: center"]');
+      if (centerEl) {
+        var ct = getText(centerEl).trim();
+        if (ct.length < 30 && timeRe.test(ct)) {
+          var m = ct.match(timeRe);
+          return m ? m[0].trim() : ct;
+        }
+      }
+      var pt = getText(prev).trim();
+      if (pt.length < 30 && timeRe.test(pt) && !prev.querySelector('[class*="message"], [class*="bubble"], [class*="msg"]')) {
+        var m2 = pt.match(timeRe);
+        return m2 ? m2[0].trim() : pt;
+      }
       prev = prev.previousElementSibling;
     }
-    const text = getText(node);
-    const m = text.match(/(\d{1,2}:\d{2})/);
-    return m?.[1] || "";
+    return "";
   }
   function extractUserId() {
     const url = location.href || "";
@@ -2541,11 +2574,38 @@ function processConversationInjected(entry, stagnantTarget, maxMs, waitMs) {
 
       clickElement(target);
       await sleep(400);
+
+      // Capture newest messages BEFORE scrolling (virtual scroll will unload them)
+      const newestConvo = extractCurrentConversationLocal();
+      const newestMsgs = newestConvo.messages || [];
+
       const scrollStat = await autoScrollMessagesToTop();
       if (!scrollStat.ok) return { ok: false, stage: "翻取", reason: scrollStat.reason || "翻取失败" };
 
-      const convo = extractCurrentConversationLocal();
-      if (!Array.isArray(convo.messages) || convo.messages.length === 0) {
+      const historyConvo = extractCurrentConversationLocal();
+      const historyMsgs = historyConvo.messages || [];
+
+      // Merge: dedup by role|text|imageUrl|videoUrl
+      const mergedMsgs = [];
+      const dedupeSet = new Set();
+      const allMsgs = historyMsgs.concat(newestMsgs);
+      for (const msg of allMsgs) {
+        const key = `${msg.isMe ? "me" : "other"}|${msg.text}|${msg.imageUrl || ""}|${msg.videoUrl || ""}`;
+        if (dedupeSet.has(key)) continue;
+        dedupeSet.add(key);
+        mergedMsgs.push({ ...msg, id: mergedMsgs.length });
+      }
+
+      const convo = {
+        chatTitle: historyConvo.chatTitle || newestConvo.chatTitle,
+        contactName: historyConvo.contactName || newestConvo.contactName,
+        contactUserId: historyConvo.contactUserId || newestConvo.contactUserId,
+        extract_mode: historyConvo.extract_mode || newestConvo.extract_mode,
+        detected_nodes: Math.max(historyConvo.detected_nodes || 0, newestConvo.detected_nodes || 0),
+        messages: mergedMsgs
+      };
+
+      if (mergedMsgs.length === 0) {
         return { ok: false, stage: "提取", reason: `消息为空（模式:${convo.extract_mode || "unknown"} 节点:${convo.detected_nodes || 0}）`, scrollStat };
       }
 
