@@ -663,6 +663,9 @@ function exportAllInOneInjected(stagnantRounds, maxMs, waitMs, doScroll, subfold
             lastCount = count;
             if (stagnant >= stagnantRounds) break;
           }
+          // Reload newest messages — virtual scroll may have unloaded them
+          if (isReverse) { ml.scrollTop = 0; } else { ml.scrollTop = ml.scrollHeight; }
+          await sleep(waitMs);
           document.body.style.overflow = savedBodyOverflow;
         }
       }
